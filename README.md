@@ -38,7 +38,27 @@ If the rules are not sure and you have installed the free Ollama program, it ask
 
 If neither is sure, the file goes into **To Review** so nothing ever gets lost.
 
-It waits two minutes after a file was last changed before moving it, so it will not snatch something you are still working on. It only looks at files sitting directly in the watched folders and never goes inside subfolders, so existing folders (like your coding projects in Documents) are left exactly as they are. It never touches folders, shortcuts, files that are still downloading, Word or Excel files that are open, or new files still called "New Text Document".
+It waits two minutes after a file was last changed before moving it, so it will not snatch something you are still working on. It never touches shortcuts, hidden files, files that are still downloading, Word or Excel files that are open, or new files still called "New Text Document".
+
+## Files inside folders
+
+It also tidies files inside everyday subfolders of the watched folders (up to three levels deep), and removes a subfolder once it is empty. It leaves these folders exactly as they are, without looking inside:
+
+- **Programming projects**: any folder with signs of code, such as `.git`, `package.json`, `requirements.txt`, `Makefile`, a Visual Studio `.sln`, or mostly code files.
+- **Program folders**: anything holding files a program needs, such as `.dll` files or Outlook data files.
+- Folders that programs keep in Documents for themselves (Zoom, Custom Office Templates, My Games and so on), hidden folders, and any folder you add to `"leave_folders_alone"` in `config.json`.
+
+To keep the old behaviour (loose files only), set `"sort_inside_folders": false`.
+
+## Files that belong together
+
+Files that depend on each other are moved together into one folder named after the main file, so nothing breaks:
+
+- Files with the same name and different types: `movie.mp4` and `movie.srt`, `trip.part1.rar` and `trip.part2.rar`.
+- A saved web page and its `_files` folder.
+- A page, note or playlist and the files it mentions: an `.html` page and its `style.css` and `pics` folder, a `.md` note and its pictures, a `.cue` and its `.bin`, an `.m3u` playlist and its songs.
+
+The files themselves are never renamed, because a page or playlist would stop finding them. Undo puts back the whole group at once.
 
 ## Installing
 

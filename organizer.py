@@ -48,6 +48,8 @@ def describe_moves(moves):
     if len(moves) == 1:
         entry = moves[0]
         text = f"{Path(entry['to']).name} moved to {entry['project']}"
+        if entry.get("related"):
+            text += f" with {entry['related']} related file(s)"
     else:
         counts = Counter(entry["project"] for entry in moves)
         text = f"Sorted {len(moves)} files: " + ", ".join(f"{n} to {p}" for p, n in counts.most_common())
@@ -93,35 +95,44 @@ class Organizer:
 
     # ------------------------------------------------------------ sorting
 
-    def try_sort(self, path, ignore_age):
-        """Sort one file if it has been left alone long enough. Returns the move summary or None."""
+    def protected_folders(self):
+        """Folders the organizer must never tidy: its own output, its own code and its own data."""
+        folders = [self.root, self.desktop / "Recent Work", APP_FOLDER, sorter.data_folder()]
+        return {folder.resolve() for folder in folders}
+
+    def try_sort(self, group, ignore_age):
+        """Sort a group of related files if all of it has been left alone long enough. Returns the move summary or None."""
         result = None
         try:
             wait = self.config.get("wait_before_sorting_seconds", 120)
-            settled = ignore_age or time.time() - path.stat().st_mtime >= wait
-            if settled and sorter.is_sortable(path, automatic=True):
-                result = sorter.sort_file(path, self.config, self.root)
+            settled = ignore_age or time.time() - sorter.last_changed(group) >= wait
+            if settled and sorter.group_is_sortable(group):
+                result = sorter.sort_group(group, self.config, self.root)
         except OSError:
-            result = None  # file vanished or is in use; we will try again next round
+            result = None  # a file vanished or is in use; we will try again next round
         return result
 
     def sweep(self, ignore_age=False):
-        """Look through the watched folders once (loose files only, never inside subfolders)."""
+        """Look through the watched folders once, including everyday subfolders but never programming projects."""
         moves = []
         with self.lock:
+            protected = self.protected_folders()
             for folder in self.watch_folders:
-                paths = sorted(folder.iterdir()) if folder.exists() else []
-                for path in paths:
-                    result = self.try_sort(path, ignore_age)
+                groups = sorter.find_groups(folder, self.config, protected) if folder.exists() else []
+                for group in groups:
+                    result = self.try_sort(group, ignore_age)
                     if result:
                         moves.append(result)
+                        sorter.remove_empty_folders(group[0].parent, folder)
         return moves
 
     def sort_one(self, path, project=None):
-        """Used by the right click menu. Returns the move summary, or None if the file could not be moved."""
+        """Used by the right click menu. Moves the file along with the files it depends on.
+        Returns the move summary, or None if the file could not be moved."""
         entry = None
         try:
-            entry = sorter.sort_file(path, self.config, self.root, forced_project=project)
+            group = sorter.group_for(path, self.config, self.protected_folders())
+            entry = sorter.sort_group(group, self.config, self.root, forced_project=project)
         except OSError as error:
             print(f"Could not move {path}: {error}")
         if entry and background_app_alive():
@@ -221,7 +232,10 @@ class Organizer:
         with self.lock:
             restored = sorter.undo_last(1)
         self.refresh_recent_work()
-        return self.notify(f"Put {restored[0].name} back" if restored else "Nothing to undo")
+        text = f"Put {restored[-1].name} back" if restored else "Nothing to undo"
+        if len(restored) > 1:
+            text += f" with {len(restored) - 1} related file(s)"
+        return self.notify(text)
 
     def on_settings(self):
         return winutils.open_folder(CONFIG_PATH)

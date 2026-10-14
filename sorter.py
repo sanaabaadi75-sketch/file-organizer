@@ -21,6 +21,29 @@ TEXT_SUFFIXES = {".txt", ".md", ".csv", ".json", ".py", ".js", ".ts", ".cs", ".c
                  ".php", ".html", ".sql", ".r", ".ino", ".java", ".xml", ".log", ".ipynb"}
 MAX_TEXT = 3000
 HIDDEN_FLAG = 2
+LINK_FLAG = 0x400  # symbolic links and junctions such as "My Music" inside Documents
+
+# Signs that a folder is a programming project. Those folders are left exactly as they are.
+CODE_MARKERS = {".git", ".svn", ".hg", ".vscode", ".idea", "node_modules", "venv", ".venv", "__pycache__",
+                ".gitignore", "package.json", "requirements.txt", "pyproject.toml", "setup.py", "pipfile",
+                "cargo.toml", "go.mod", "pom.xml", "build.gradle", "cmakelists.txt", "makefile", "gemfile",
+                "composer.json", "platformio.ini"}
+CODE_MARKER_SUFFIXES = {".sln", ".csproj", ".vcxproj", ".xcodeproj", ".uproject", ".code-workspace"}
+CODE_SUFFIXES = {".py", ".js", ".ts", ".jsx", ".tsx", ".cs", ".cpp", ".c", ".h", ".hpp", ".java", ".kt", ".go",
+                 ".rs", ".rb", ".php", ".swift", ".ino", ".ipynb", ".sh", ".ps1", ".lua", ".r", ".scala", ".vue",
+                 ".css", ".scss", ".sql"}
+# Files a program needs next to it. A folder holding any of these belongs to a program and is left alone.
+APP_SUFFIXES = {".dll", ".so", ".dylib", ".sys", ".pak", ".asar", ".sqlite", ".ldb", ".pst", ".ost"}
+# Folders that programs keep in your Documents for themselves
+LEAVE_ALONE = {"zoom", "custom office templates", "my games", "windowspowershell", "powershell", "outlook files",
+               "onenote notebooks", "visual studio 2019", "visual studio 2022", "adobe", "fax", "scanned documents"}
+
+# Files that can point at other files by name: a web page and its pictures, a playlist and its songs
+REFERENCE_SUFFIXES = {".html", ".htm", ".xhtml", ".css", ".svg", ".md", ".tex", ".m3u", ".m3u8", ".pls", ".cue",
+                      ".xspf"}
+MAX_REFERENCE_TEXT = 200_000
+# Names too common to mean two files belong together just because they share them
+GENERIC_NAMES = {"image", "download", "untitled", "document", "file", "new", "copy", "scan", "export"}
 
 
 # ---------------------------------------------------------------- places we keep our own data
@@ -93,6 +116,176 @@ def is_sortable(path, automatic=True):
     except OSError:
         sortable = False
     return sortable
+
+
+def is_link(path):
+    attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    return path.is_symlink() or bool(attributes & LINK_FLAG)
+
+
+def folder_kind(folder):
+    """'code' for a programming project, 'app' for a program's own files, otherwise 'plain' (safe to tidy)."""
+    kind = "plain"
+    try:
+        children = list(folder.iterdir())
+        names = {child.name.lower() for child in children}
+        file_suffixes = [child.suffix.lower() for child in children if child.is_file()]
+        code_files = sum(1 for suffix in file_suffixes if suffix in CODE_SUFFIXES)
+        if (names & CODE_MARKERS
+                or CODE_MARKER_SUFFIXES.intersection(child.suffix.lower() for child in children)
+                or (code_files >= 2 and code_files * 2 >= len(file_suffixes))):
+            kind = "code"
+        elif APP_SUFFIXES.intersection(file_suffixes):
+            kind = "app"
+    except OSError:
+        kind = "app"  # we cannot look inside, so we leave it alone
+    return kind
+
+
+# ---------------------------------------------------------------- finding files that depend on each other
+
+def shared_name(path):
+    """The part of a name related files share: 'trip.mp4', 'trip.srt', 'trip.part2.rar' and 'trip_files' all give 'trip'.
+    Returns None for plain folders and very common names."""
+    name = None
+    if path.is_dir():
+        if path.name.lower().endswith("_files"):
+            name = path.name.lower()[:-len("_files")]
+    else:
+        name = re.sub(r"(\.part\d+|\.tar|\.zip|\.7z|\.rar)+$", "", path.stem.lower())
+    if name in GENERIC_NAMES or not name:
+        name = None
+    return name
+
+
+def mentioned_names(path, neighbours):
+    """Names of neighbouring files and folders that this file mentions (neighbours maps lowercase name -> path)."""
+    found = set()
+    if path.suffix.lower() in REFERENCE_SUFFIXES:
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as handle:
+                text = handle.read(MAX_REFERENCE_TEXT).lower().replace("%20", " ")
+        except OSError:
+            text = ""
+        for name, neighbour in neighbours.items():
+            # a folder only counts when it is used as part of a path, like "images/logo.png"
+            ending = r"[/\\]" if neighbour.is_dir() else r"(?![\w-])"
+            if neighbour != path and re.search(r"(?<![\w.-])" + re.escape(name) + ending, text):
+                found.add(name)
+    return found
+
+
+def related_groups(entries):
+    """Split files (and the folders they use) into groups that depend on each other and must move together.
+    Groups made only of folders are dropped, those folders are not part of anything."""
+    neighbours = {entry.name.lower(): entry for entry in entries}
+    leader = {entry: entry for entry in entries}
+
+    def find(entry):
+        while leader[entry] != entry:
+            entry = leader[entry]
+        return entry
+
+    def join(first, second):
+        leader[find(first)] = find(second)
+        return None
+
+    by_shared = {}
+    for entry in entries:
+        key = shared_name(entry)
+        if key:
+            by_shared.setdefault(key, []).append(entry)
+    for members in by_shared.values():
+        for other in members[1:]:
+            join(members[0], other)
+    for entry in entries:
+        if entry.is_file():
+            for name in mentioned_names(entry, neighbours):
+                join(entry, neighbours[name])
+    groups = {}
+    for entry in entries:
+        groups.setdefault(find(entry), []).append(entry)
+    return [sorted(group) for group in groups.values() if any(member.is_file() for member in group)]
+
+
+def find_groups(folder, config, protected, depth=0):
+    """Every group of related files to sort in this folder and, when sort_inside_folders is on, in its everyday
+    subfolders too. Programming projects, program folders, hidden folders and protected folders are skipped."""
+    inside = config.get("sort_inside_folders", True)
+    max_depth = config.get("max_folder_depth", 3) if inside else 0
+    leave_alone = LEAVE_ALONE | {name.lower() for name in config.get("leave_folders_alone", [])}
+    ignored = load_ignored()
+    files, folders, kinds = [], [], {}
+    try:
+        children = sorted(folder.iterdir())
+    except OSError:
+        children = []
+    for child in children:
+        try:
+            if child.is_dir():
+                usable = (inside and not is_link(child) and not is_hidden(child)
+                          and child.name.lower() not in leave_alone and str(child) not in ignored
+                          and child.resolve() not in protected)
+                if usable:
+                    kinds[child] = folder_kind(child)
+                    # a saved web page's "_files" folder always travels with its page, other folders only when plain
+                    if kinds[child] == "plain" or child.name.lower().endswith("_files"):
+                        folders.append(child)
+            elif is_sortable(child, automatic=False):
+                files.append(child)
+        except OSError:
+            pass
+    groups = related_groups(files + folders)
+    claimed = {member for group in groups for member in group}
+    for subfolder in folders:
+        if subfolder not in claimed and kinds[subfolder] == "plain" and depth < max_depth:
+            groups += find_groups(subfolder, config, protected, depth + 1)
+    return groups
+
+
+def group_for(path, config, protected):
+    """The file together with the neighbours it depends on (for the right click menu)."""
+    deepest = config.get("max_folder_depth", 3)
+    groups = [group for group in find_groups(path.parent, config, protected, depth=deepest) if path in group]
+    return groups[0] if groups else [path]
+
+
+def group_is_sortable(group):
+    """Every file in the group can be moved automatically (none is open or was put back with Undo)."""
+    ignored = load_ignored()
+    return all(str(member) not in ignored and (member.is_dir() or is_sortable(member, automatic=True))
+               for member in group)
+
+
+def last_changed(group):
+    """When anything in the group (including inside its folders) was last changed."""
+    times = [0.0]
+    for member in group:
+        times.append(member.stat().st_mtime)
+        if member.is_dir():
+            times += [inner.stat().st_mtime for inner in member.rglob("*")]
+    return max(times)
+
+
+def main_file(group):
+    """The file the others hang off: a page or playlist that mentions them, otherwise the biggest file."""
+    files = [member for member in group if member.is_file()]
+    referencing = REFERENCE_SUFFIXES - {".css", ".svg"}
+    return max(files, key=lambda path: (path.suffix.lower() in referencing, path.stat().st_size))
+
+
+def remove_empty_folders(folder, stop_at):
+    """After files were moved out of a subfolder, remove it (and empty folders above it). Never removes stop_at."""
+    removed = 0
+    current = folder
+    try:
+        while current != stop_at and stop_at in current.parents and not any(current.iterdir()):
+            current.rmdir()
+            removed += 1
+            current = current.parent
+    except OSError:
+        pass
+    return removed
 
 
 # ---------------------------------------------------------------- reading what is inside a file
@@ -237,35 +430,47 @@ def unique_path(target):
     return candidate
 
 
-def destination_for(path, project, root):
-    """Projects/<Project>/<Year>/<Month>/file, based on when the file was last changed (To Review too)."""
-    when = datetime.fromtimestamp(path.stat().st_mtime)
+def destination_for(group, main, project, root):
+    """Projects/<Project>/<Year>/<Month>/, based on when the main file was last changed (To Review too).
+    Related files get their own folder named after the main file, so they stay together and keep working."""
+    when = datetime.fromtimestamp(main.stat().st_mtime)
     folder = root / project / f"{when:%Y}" / f"{when:%m}"
-    return unique_path(folder / path.name)
+    if len(group) > 1:
+        folder = unique_path(folder / re.sub(r"(\.part\d+|\.tar)+$", "", main.stem, flags=re.IGNORECASE))
+    return folder
 
 
-def log_move(source, target, project, method):
+def log_move(source, target, project, method, batch, in_group_folder):
     entry = {"time": datetime.now().isoformat(timespec="seconds"), "from": str(source),
-             "to": str(target), "project": project, "method": method}
+             "to": str(target), "project": project, "method": method, "batch": batch,
+             "group_folder": in_group_folder}
     with open(data_folder() / "moves.jsonl", "a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry) + "\n")
     return entry
 
 
-def sort_file(path, config, root, forced_project=None):
-    """Move one file into its project. Returns a small summary dict."""
+def sort_group(group, config, root, forced_project=None):
+    """Move a group of related files into one project, together. Returns a summary of the main file's move,
+    with 'related' saying how many files or folders went along with it."""
+    main = main_file(group)
     if forced_project:
         project, method = forced_project, "manual"
         ignored = load_ignored()
-        ignored.discard(str(path))
+        ignored.difference_update(str(member) for member in group)
         save_ignored(ignored)
     else:
-        project, method = classify(path, config)
-    target = destination_for(path, project, root)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(path), str(target))
-    entry = log_move(path, target, project, method)
-    return entry
+        project, method = classify(main, config)
+    folder = destination_for(group, main, project, root)
+    folder.mkdir(parents=True, exist_ok=True)
+    batch = str(time.time_ns())
+    summary = None
+    for member in group:
+        target = unique_path(folder / member.name)
+        shutil.move(str(member), str(target))
+        entry = log_move(member, target, project, method, batch, len(group) > 1)
+        if member == main:
+            summary = dict(entry, related=len(group) - 1)
+    return summary
 
 
 # ---------------------------------------------------------------- undo
@@ -281,11 +486,19 @@ def read_log():
 
 
 def undo_last(count=1):
-    """Put the last few moved files back where they were, and stop auto sorting them."""
+    """Put the last few moves back where they were, and stop auto sorting those files.
+    Related files that were moved together count as one move."""
     entries = read_log()
-    count = max(0, min(count, len(entries)))
-    to_undo = entries[len(entries) - count:]
-    kept = entries[:len(entries) - count]
+    batches = []
+    for entry in entries:
+        key = entry.get("batch", entry["time"] + entry["to"])  # older log lines have no batch
+        if batches and batches[-1][0] == key:
+            batches[-1][1].append(entry)
+        else:
+            batches.append((key, [entry]))
+    count = max(0, min(count, len(batches)))
+    kept = [entry for _, batch in batches[:len(batches) - count] for entry in batch]
+    to_undo = [entry for _, batch in batches[len(batches) - count:] for entry in batch]
     ignored = load_ignored()
     restored = []
     for entry in reversed(to_undo):
@@ -295,6 +508,8 @@ def undo_last(count=1):
             shutil.move(str(target), str(source))
             ignored.add(str(source))
             restored.append(source)
+            if entry.get("group_folder") and not any(target.parent.iterdir()):
+                target.parent.rmdir()
     save_ignored(ignored)
     with open(data_folder() / "moves.jsonl", "w", encoding="utf-8") as handle:
         handle.writelines(json.dumps(entry) + "\n" for entry in kept)

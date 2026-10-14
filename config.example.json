@@ -5,6 +5,9 @@
   "wait_before_sorting_seconds": 120,
   "check_every_seconds": 30,
   "min_keyword_score": 2,
+  "sort_inside_folders": true,
+  "max_folder_depth": 3,
+  "leave_folders_alone": [],
   "recent_work": {
     "days": 14,
     "files_per_project": 5,
