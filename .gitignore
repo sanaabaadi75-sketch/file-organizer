@@ -1,0 +1,4 @@
+# Your own projects and settings (created from config.example.json on first run)
+config.json
+__pycache__/
+*.pyc

@@ -1,0 +1,76 @@
+{
+  "projects_folder": "auto",
+  "watch_folders": ["Desktop", "Downloads", "Documents", "Pictures", "Videos", "Music"],
+  "review_folder": "To Review",
+  "wait_before_sorting_seconds": 120,
+  "check_every_seconds": 30,
+  "min_keyword_score": 2,
+  "recent_work": {
+    "days": 14,
+    "files_per_project": 5,
+    "refresh_minutes": 30
+  },
+  "ai": {
+    "enabled": false,
+    "url": "http://localhost:11434",
+    "model": "qwen3.5:4b",
+    "timeout_seconds": 60
+  },
+  "projects": {
+    "School": {
+      "description": "coursework: assignments, labs, quizzes, exams, lecture notes, code written for classes",
+      "keywords": ["assignment", "lab", "quiz", "midterm", "exam", "lecture", "syllabus", "rubric", "homework"],
+      "extensions": []
+    },
+    "Work": {
+      "description": "work documents, reports, meeting notes and presentations for your job",
+      "keywords": ["meeting", "report", "agenda", "minutes", "presentation"],
+      "extensions": []
+    },
+    "Job Search": {
+      "description": "resumes, cover letters, job postings, job applications, interview preparation",
+      "keywords": ["resume", "CV", "cover letter", "job posting", "interview"],
+      "extensions": []
+    },
+    "Learning": {
+      "description": "self study: tutorials, courses, books and side projects",
+      "keywords": ["tutorial", "course", "notes", "ebook"],
+      "extensions": []
+    },
+    "Finances": {
+      "description": "bank statements, bills, receipts, taxes, rent, payments",
+      "keywords": ["invoice", "receipt", "statement", "bank", "tax", "rent", "bill", "payment"],
+      "extensions": []
+    },
+    "Personal": {
+      "description": "family and personal documents, and anything personal that fits nowhere else",
+      "keywords": ["family", "personal"],
+      "extensions": []
+    },
+    "Screenshots": {
+      "description": "screenshots and screen captures",
+      "keywords": ["Screenshot", "Screen Shot", "Snip"],
+      "extensions": []
+    },
+    "Installers": {
+      "description": "program installers and setup files",
+      "keywords": ["setup", "installer"],
+      "extensions": [".exe", ".msi"]
+    },
+    "Photos": {
+      "description": "photos and pictures",
+      "keywords": ["photo", "IMG"],
+      "extensions": [".jpg", ".jpeg", ".png", ".heic", ".gif", ".webp", ".bmp"]
+    },
+    "Videos": {
+      "description": "videos and screen recordings",
+      "keywords": ["video", "VID"],
+      "extensions": [".mp4", ".mov", ".mkv", ".avi", ".wmv"]
+    },
+    "Music": {
+      "description": "music and audio recordings",
+      "keywords": ["song", "audio"],
+      "extensions": [".mp3", ".wav", ".flac", ".m4a", ".aac"]
+    }
+  }
+}
